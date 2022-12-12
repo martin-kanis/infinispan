@@ -5,6 +5,7 @@ import org.infinispan.client.hotrod.Search;
 import org.infinispan.client.hotrod.annotation.model.Model;
 import org.infinispan.client.hotrod.evolution.model.BaseEntityWithNonAnalyzedNameFieldEntity.BaseEntityWithNonAnalyzedNameFieldEntitySchema;
 import org.infinispan.client.hotrod.evolution.model.BaseModelEntity.BaseModelEntitySchema;
+import org.infinispan.client.hotrod.evolution.model.BaseModelIndexAttributesEntity;
 import org.infinispan.client.hotrod.evolution.model.BaseModelWithNameAnalyzedAndNameNonAnalyzedFieldEntity;
 import org.infinispan.client.hotrod.evolution.model.BaseModelWithNameAnalyzedAndNameNonAnalyzedFieldEntity.BaseModelWithNameAnalyzedAndNameNonAnalyzedFieldEntitySchema;
 import org.infinispan.client.hotrod.evolution.model.BaseModelWithNameFieldAnalyzedEntity.BaseModelWithNameFieldAnalyzedEntitySchema;
@@ -33,7 +34,7 @@ import org.infinispan.test.fwk.TestCacheManagerFactory;
 import org.testng.annotations.Test;
 
 import java.util.HashSet;
-import java.util.Set;
+import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -379,11 +380,32 @@ public class IndexSchemaNoDowntimeUpgradeTest extends SingleHotRodServerTest {
         doQuery("FROM evolution.Model WHERE name LIKE '%3%'", cache, 2);
     }
 
+    @Test
+    void testRemoveAggregableIndexAttribute() {
+        // VERSION 1
+        updateSchemaIndex(BaseModelIndexAttributesEntity.BaseModelIndexAttributesEntitySchema.INSTANCE);
+        RemoteCache<String, Model> cache = remoteCacheManager.getCache(CACHE_NAME);
+
+        // Create VERSION 1 entities
+        ModelUtils.createModelEntities(cache, 5, ModelUtils.createBaseModelIndexAttributesEntity(1));
+
+        // VERSION 1
+        // If there is WHERE clause on an Integer field, the aggregate query fails with:
+        // org.infinispan.client.hotrod.exceptions.HotRodClientException:Request for messageId=20 returned server error (status=0x85):
+        // org.infinispan.objectfilter.ParsingException: ISPN028526: Invalid query:
+        // SELECT _gen0.entityVersion, _gen0.size FROM evolution.Model _gen0  WHERE size < 10; Parser error messages:
+        // [[statement, selectStatement, querySpec, whereClause, logicalExpression, expression, logicalOrExpression, logicalAndExpression, negatedExpression, equalityExpression, relationalExpression, additiveExpression, standardFunction, indexFunction, index_key]:
+        // line 1:73 rule index_key failed predicate: {validateSoftKeyword("index")}?, [statement, selectStatement, querySpec, whereClause, logicalExpression, expression, logicalOrExpression, logicalAndExpression, negatedExpression, equalityExpression, relationalExpression, additiveExpression, standardFunction, indexFunction]:
+        // line 1:73 mismatched token: [@21,73:76='size',<60>,1:73]; expecting type LPAREN, [statement, selectStatement, querySpec, whereClause, logicalExpression, expression, logicalOrExpression, logicalAndExpression, negatedExpression, equalityExpression, relationalExpression, additiveExpression, standardFunction, indexFunction]:
+        // line 1:78 mismatched token: [@23,78:78='<',<77>,1:78]; expecting type RPAREN].
+        doQuery("SELECT e.entityVersion, COUNT(e.size) FROM evolution.Model e WHERE e.size < 10 GROUP BY e.entityVersion", cache, 5);
+    }
+
     private <T> void doQuery(String query, RemoteCache<String, T> messageCache, int expectedResults) {
         QueryFactory queryFactory = Search.getQueryFactory(messageCache);
         Query<T> infinispanObjectEntities = queryFactory.create(query);
-        Set<T> result = StreamSupport.stream(infinispanObjectEntities.spliterator(), false)
-                .collect(Collectors.toSet());
+        List<T> result = StreamSupport.stream(infinispanObjectEntities.spliterator(), false)
+                .collect(Collectors.toList());
 
         assertThat(result).hasSize(expectedResults);
     }
